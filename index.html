@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="ms">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maybank Redactor</title>
+<style>
+  :root {
+    --ink: #1b1b1b;
+    --muted: #6b6b6b;
+    --line: #e4e1d8;
+    --paper: #faf8f3;
+    --panel: #ffffff;
+    --accent: #ffc72c;
+    --accent-ink: #5a4300;
+    --keep: #1f8a4c;
+    --credit: #1f8a4c;
+    --danger: #b3261e;
+    --hl: #ffe859;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; font: 14px/1.45 "Segoe UI", system-ui, sans-serif; color: var(--ink);
+    background: var(--paper);
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+  header h1 span { background: var(--accent); padding: 1px 6px; margin-right: 6px; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  header .spacer { flex: 1; }
+  .privacy { font-size: 12px; color: var(--muted); }
+  button {
+    font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  }
+  button:hover { border-color: #bdb7a6; }
+  button.primary { background: var(--ink); color: #fff; border-color: var(--ink); font-weight: 600; }
+  button.primary:disabled { opacity: .4; cursor: default; }
+  button.link { border: none; background: none; padding: 0; color: var(--muted); text-decoration: underline; }
+  input[type=text], input[type=password], input[type=date], select {
+    font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  }
+
+  /* Upload */
+  #drop {
+    max-width: 560px; margin: 12vh auto; padding: 48px 32px; text-align: center;
+    border: 2px dashed #cfc8b4; border-radius: 12px; background: var(--panel);
+  }
+  #drop.over { border-color: var(--ink); background: #fffbea; }
+  #drop h2 { margin: 0 0 6px; font-size: 20px; }
+  #drop p { margin: 0 0 18px; color: var(--muted); }
+  #pwRow { display: none; margin-top: 16px; gap: 8px; justify-content: center; }
+  #pwRow.show { display: flex; }
+  .err { color: var(--danger); margin-top: 12px; min-height: 1.4em; }
+
+  /* Workspace */
+  #work { display: none; height: calc(100vh - 53px); grid-template-columns: minmax(520px, 46%) 1fr; }
+  #work.show { display: grid; }
+  #left { display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--panel); min-height: 0; }
+  .filters { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
+  .filters .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .filters label.sm { font-size: 12px; color: var(--muted); }
+  #q { flex: 1; min-width: 160px; }
+  .dt { position: relative; display: inline-flex; }
+  .dt input[type=text] { width: 116px; padding-right: 30px; font-family: var(--mono); font-size: 13px; }
+  .dt input.bad { border-color: var(--danger); background: #fff5f4; }
+  .dt .cal {
+    position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+    border: none; background: none; padding: 4px 6px; color: var(--muted); display: flex;
+  }
+  .dt .cal:hover { color: var(--ink); }
+  .dt .native { position: absolute; right: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+  .bulk { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .bulk .count { margin-left: auto; color: var(--muted); font-size: 12px; }
+
+  #list { flex: 1; overflow: auto; min-height: 0; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    position: sticky; top: 0; background: #f4f1e8; text-align: left; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .4px; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line);
+  }
+  tbody td { padding: 5px 8px; border-bottom: 1px solid #f0ede4; vertical-align: top; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #fffbea; }
+  tbody tr.kept { background: #eef8f1; }
+  tbody tr.kept:hover { background: #e3f3e8; }
+  tbody tr.hl { outline: 2px solid var(--accent); outline-offset: -2px; }
+  tbody tr.mk, tbody tr.mk:hover { background: color-mix(in srgb, var(--hl) 45%, white); }
+  td.mkc { padding: 3px 0; width: 26px; }
+  button.mk {
+    padding: 3px 4px; border: 1px solid transparent; border-radius: 4px; background: none;
+    color: #b9b2a0; display: flex;
+  }
+  button.mk:hover { color: var(--ink); border-color: var(--line); }
+  tr.mk button.mk { color: var(--ink); background: var(--hl); }
+  td.d { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  td.amt { font-family: var(--mono); text-align: right; white-space: nowrap; }
+  td.amt.cr { color: var(--credit); }
+  .loc { color: var(--muted); font-size: 12px; }
+  .card-tag { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  tr.section td { background: #fbfaf6; font-size: 12px; font-weight: 600; color: var(--muted); cursor: default; }
+
+  .foot { border-top: 1px solid var(--line); padding: 12px 16px; display: grid; gap: 10px; background: #fcfbf8; }
+  .totals { display: flex; gap: 18px; font-size: 13px; flex-wrap: wrap; }
+  .totals b { font-family: var(--mono); }
+  .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; font-size: 13px; }
+  .opts label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
+  .opts small { color: var(--muted); }
+  .actions { display: flex; align-items: center; gap: 12px; }
+  #report { font-size: 12px; color: var(--muted); }
+  #report.ok { color: var(--keep); }
+  #report.bad { color: var(--danger); }
+
+  /* Preview */
+  #preview { overflow: auto; padding: 20px; min-height: 0; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin: 0 auto 28px; max-width: 760px; }
+  .sw { display: inline-block; width: 12px; height: 12px; vertical-align: -2px; margin-right: 5px; }
+  .page { position: relative; max-width: 760px; margin: 0 auto 22px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .page img { display: block; width: 100%; height: auto; }
+  .page .no { position: absolute; top: -18px; left: 0; font-size: 11px; color: var(--muted); }
+  .box { position: absolute; }
+  .box.r { background: rgba(0,0,0,.86); }
+  .box.k { outline: 1.5px solid var(--keep); background: rgba(31,138,76,.07); }
+  .box.hit { z-index: 1; }
+  .box.y { background: var(--hl); opacity: .6; }
+  .hl-row { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+  .swatch {
+    width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid #fff;
+    box-shadow: 0 0 0 1px var(--line); cursor: pointer;
+  }
+  .swatch.on { box-shadow: 0 0 0 2px var(--ink); }
+  #hlColor { width: 30px; height: 24px; padding: 0 2px; border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer; }
+  .pages-row { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+  .pages-row input { width: 56px; }
+  .box.hit { cursor: pointer; }
+  .box.hit:hover { outline: 2px solid var(--accent); }
+  .box.hl { outline: 2px solid var(--accent); z-index: 2; }
+  .page.dropped img { opacity: .18; }
+  .page.dropped .box { display: none; }
+  .page .drop-note {
+    display: none; position: absolute; inset: 0; align-items: center; justify-content: center;
+    font-weight: 600; color: var(--muted); letter-spacing: .3px;
+  }
+  .page.dropped .drop-note { display: flex; }
+  .drop-note span { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>Maybank</span>Redactor</h1>
+  <div class="meta" id="meta"></div>
+  <div class="spacer"></div>
+  <div class="privacy">Local sahaja: fail diproses dalam mesin ni, tak keluar ke internet.</div>
+  <button id="newBtn" style="display:none">Fail lain</button>
+</header>
+
+<section id="drop">
+  <h2>Drop penyata kad kredit Maybank (PDF)</h2>
+  <p>Pilih tarikh dan item yang nak dikekalkan. Yang lain akan di-redact betul-betul (text dibuang, bukan sekadar ditutup).</p>
+  <button class="primary" id="pickBtn">Pilih fail</button>
+  <input type="file" id="file" accept="application/pdf" hidden>
+  <div id="pwRow">
+    <input type="password" id="pw" placeholder="Kata laluan PDF">
+    <button id="pwBtn">Buka</button>
+  </div>
+  <div class="err" id="err"></div>
+</section>
+
+<main id="work">
+  <aside id="left">
+    <div class="filters">
+      <div class="row">
+        <label class="sm" for="from">Dari</label>
+        <span class="dt"><input type="text" id="from" placeholder="dd/mm/yyyy" maxlength="10" inputmode="numeric" autocomplete="off"><button type="button" class="cal" data-for="from" title="Pilih dari kalendar"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg></button><input type="date" class="native" tabindex="-1" aria-hidden="true"></span>
+        <label class="sm" for="to">Hingga</label>
+        <span class="dt"><input type="text" id="to" placeholder="dd/mm/yyyy" maxlength="10" inputmode="numeric" autocomplete="off"><button type="button" class="cal" data-for="to" title="Pilih dari kalendar"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg></button><input type="date" class="native" tabindex="-1" aria-hidden="true"></span>
+        <select id="basis" title="Tarikh yang digunakan untuk tapisan">
+          <option value="txn_date">Tarikh transaksi</option>
+          <option value="post_date">Tarikh pos</option>
+        </select>
+      </div>
+      <div class="row">
+        <input type="text" id="q" placeholder="Cari huraian / lokasi / amaun">
+        <select id="card"></select>
+        <select id="kind">
+          <option value="all">Semua jenis</option>
+          <option value="debit">Debit sahaja</option>
+          <option value="credit">Kredit (CR) sahaja</option>
+        </select>
+      </div>
+      <div class="bulk">
+        <button id="tickAll" title="Tick semua transaksi yang dipapar">Tick semua</button>
+        <button id="untickAll" title="Untick semua transaksi yang dipapar">Untick semua</button>
+        <button id="hlAll" title="Highlight (dan keep) semua transaksi yang dipapar">Highlight semua</button>
+        <button class="link" id="clearHl">Buang highlight</button>
+        <button class="link" id="resetF">Reset tapisan</button>
+        <span class="count" id="shown"></span>
+      </div>
+    </div>
+    <div id="list">
+      <table>
+        <thead><tr><th></th><th title="Highlight"></th><th>Txn</th><th>Pos</th><th>Huraian</th><th style="text-align:right">RM</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="foot">
+      <div class="totals">
+        <span>Dikekalkan: <b id="kCount">0</b></span>
+        <span>Debit: <b id="kDebit">0.00</b></span>
+        <span>Kredit: <b id="kCredit">0.00</b></span>
+        <span>Bersih: <b id="kNet">0.00</b></span>
+        <span>Highlight: <b id="hCount">0</b> / RM <b id="hSum">0.00</b></span>
+      </div>
+      <div class="opts">
+        <label><input type="checkbox" data-opt="balances" checked> Redact baki, jumlah &amp; had kredit</label>
+        <label><input type="checkbox" data-opt="card" checked> Mask nombor kad <small>(kekal 4 digit akhir)</small></label>
+        <label><input type="checkbox" data-opt="identity"> Redact nama &amp; alamat</label>
+        <label><input type="checkbox" data-opt="drop_pages" checked> Buang page tanpa item dikekalkan</label>
+        <label>Gaya redaction:
+          <select data-opt="style">
+            <option value="text">Text sahaja</option>
+            <option value="rows">Blok penuh baris</option>
+          </select>
+        </label>
+      </div>
+      <div class="hl-row">
+        <span>Warna highlight</span>
+        <button type="button" class="swatch" data-color="#ffe859" title="Kuning" style="background:#ffe859"></button>
+        <button type="button" class="swatch" data-color="#a6f0a6" title="Hijau" style="background:#a6f0a6"></button>
+        <button type="button" class="swatch" data-color="#a8d8ff" title="Biru" style="background:#a8d8ff"></button>
+        <button type="button" class="swatch" data-color="#ffb3d9" title="Pink" style="background:#ffb3d9"></button>
+        <button type="button" class="swatch" data-color="#ffc870" title="Oren" style="background:#ffc870"></button>
+        <input type="color" id="hlColor" value="#ffe859" data-opt="hl_color" title="Warna sendiri">
+      </div>
+      <div class="pages-row">
+        <span>Export page</span>
+        <input type="number" id="pgFrom" min="1" value="1" data-opt="page_from">
+        <span>hingga</span>
+        <input type="number" id="pgTo" min="1" value="1" data-opt="page_to">
+        <button class="link" id="pgAll">Semua page</button>
+      </div>
+      <div class="actions">
+        <button class="primary" id="dl">Muat turun PDF redacted</button>
+        <span id="report"></span>
+      </div>
+    </div>
+  </aside>
+  <section id="preview">
+    <div class="legend">
+      <span><i class="sw" style="background:#000"></i>Akan di-redact</span>
+      <span><i class="sw" style="outline:1.5px solid var(--keep)"></i>Dikekalkan</span>
+      <span><i class="sw" style="background:var(--hl)"></i>Highlight</span>
+      <span>Klik row = keep/redact, Shift+klik = highlight.</span>
+    </div>
+    <div id="pages"></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const state = { doc: null, file: null, keep: new Set(), hl: new Set(), plan: null };
+const MARKER = `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9.5 2.5l4 4-6 6H4.5v-3z"/><path d="M2 14.5h12"/></svg>`;
+const fmt = n => n.toLocaleString("en-MY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- upload ----------
+const drop = $("#drop");
+$("#pickBtn").onclick = () => $("#file").click();
+$("#file").onchange = e => e.target.files[0] && load(e.target.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => {
+  e.preventDefault(); drop.classList.remove("over");
+  const f = e.dataTransfer.files[0];
+  if (f) load(f);
+};
+$("#pwBtn").onclick = () => state.file && load(state.file, $("#pw").value);
+$("#pw").onkeydown = e => { if (e.key === "Enter") $("#pwBtn").click(); };
+$("#newBtn").onclick = () => {
+  if (state.doc) fetch("/api/close", { method: "POST", body: JSON.stringify({ id: state.doc.id }) });
+  location.reload();
+};
+
+async function load(file, password = "") {
+  state.file = file;
+  $("#err").textContent = "Membaca...";
+  const res = await fetch("/api/open", {
+    method: "POST",
+    headers: { "X-Password": encodeURIComponent(password) },
+    body: file,
+  });
+  const data = await res.json();
+  if (res.status === 401) {
+    $("#pwRow").classList.add("show");
+    $("#err").textContent = data.error;
+    $("#pw").focus();
+    return;
+  }
+  if (!res.ok) { $("#err").textContent = data.error || "Gagal buka fail."; return; }
+  state.doc = data;
+  state.keep = new Set();
+  state.hl = new Set();
+  start();
+}
+
+// ---------- workspace ----------
+function start() {
+  const d = state.doc;
+  drop.style.display = "none";
+  $("#work").classList.add("show");
+  $("#newBtn").style.display = "";
+  const cardName = c => `${c.name.replace(/^MAYBANK\s*/, "")} ..${c.last4}`;
+  $("#meta").textContent = `${state.file.name}  |  Penyata ${d.statement_date}  |  ${d.transactions.length} transaksi`;
+  $("#card").innerHTML = `<option value="all">Semua kad</option>` +
+    d.cards.map(c => `<option value="${c.id}">${esc(cardName(c))}</option>`).join("");
+  resetFilters();
+  const n = d.pages.length;
+  for (const id of ["#pgFrom", "#pgTo"]) $(id).max = n;
+  $("#pgFrom").value = 1; $("#pgTo").value = n;
+
+  $("#pages").innerHTML = d.pages.map((p, i) => `
+    <div class="page" id="pg${i}" style="aspect-ratio:${p.w}/${p.h}">
+      <span class="no">Page ${i + 1}</span>
+      <img loading="lazy" src="/api/page?id=${d.id}&n=${i}" alt="Page ${i + 1}">
+      <div class="layer"></div>
+      <div class="drop-note"></div>
+    </div>`).join("");
+  renderList();
+  refreshPlan();
+}
+
+function dateBounds() {
+  const ds = state.doc.transactions.flatMap(t => [t.txn_date, t.post_date]).filter(Boolean).sort();
+  return [ds[0], ds[ds.length - 1]];
+}
+
+// Dates are typed and shown as dd/mm/yyyy; filtering compares ISO yyyy-mm-dd strings.
+const toDmy = iso => iso ? iso.split("-").reverse().join("/") : "";
+function toIso(dmy) {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(dmy.trim());
+  if (!m) return null;
+  const [d, mo, y] = [+m[1], +m[2], +m[3]];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+// "" = no bound, null = invalid (input is flagged and the bound ignored).
+function readDate(id) {
+  const el = $(id), raw = el.value.trim();
+  const iso = raw ? toIso(raw) : "";
+  el.classList.toggle("bad", iso === null);
+  return iso || "";
+}
+
+for (const id of ["from", "to"]) {
+  const input = $("#" + id), native = input.parentElement.querySelector(".native");
+  input.addEventListener("input", e => {
+    // Auto-insert slashes while typing digits; leave deletions alone.
+    if (e.inputType && e.inputType.startsWith("delete")) return renderList();
+    const digits = input.value.replace(/\D/g, "").slice(0, 8);
+    let out = digits.slice(0, 2);
+    if (digits.length > 2) out += "/" + digits.slice(2, 4);
+    if (digits.length > 4) out += "/" + digits.slice(4);
+    if (digits.length === 2 || digits.length === 4) out += "/";
+    input.value = out;
+    renderList();
+  });
+  input.parentElement.querySelector(".cal").onclick = () => {
+    native.value = toIso(input.value) || "";
+    try { native.showPicker(); } catch { native.click(); }
+  };
+  native.onchange = () => { input.value = toDmy(native.value); renderList(); };
+}
+
+function resetFilters() {
+  const [lo, hi] = dateBounds();
+  document.querySelectorAll(".dt .native").forEach(n => { n.min = lo; n.max = hi; });
+  $("#from").value = toDmy(lo); $("#to").value = toDmy(hi);
+  $("#from").classList.remove("bad"); $("#to").classList.remove("bad");
+  $("#q").value = ""; $("#card").value = "all"; $("#kind").value = "all";
+}
+
+function visible() {
+  const from = readDate("#from"), to = readDate("#to"), basis = $("#basis").value;
+  const q = $("#q").value.trim().toLowerCase();
+  const card = $("#card").value, kind = $("#kind").value;
+  return state.doc.transactions.filter(t => {
+    const d = t[basis];
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    if (card !== "all" && String(t.card) !== card) return false;
+    if (kind === "debit" && (t.credit || t.amount == null)) return false;
+    if (kind === "credit" && !t.credit) return false;
+    if (q) {
+      const hay = `${t.desc} ${t.location} ${t.extra} ${t.amount ?? ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function renderList() {
+  const d = state.doc;
+  const vis = visible();
+  let lastCard = null, html = "";
+  for (const t of vis) {
+    if (t.card !== lastCard && d.cards.length > 1) {
+      const c = d.cards[t.card];
+      html += `<tr class="section"><td colspan="6">${esc(c ? `${c.name} ..${c.last4}` : "Lain-lain")}</td></tr>`;
+      lastCard = t.card;
+    }
+    const kept = state.keep.has(t.id), marked = state.hl.has(t.id);
+    const amt = t.amount == null ? "" : fmt(t.amount) + (t.credit ? " CR" : "");
+    html += `<tr data-id="${t.id}" class="${kept ? "kept" : ""} ${marked ? "mk" : ""}">
+      <td><input type="checkbox" ${kept ? "checked" : ""} tabindex="-1"></td>
+      <td class="mkc"><button class="mk" title="Highlight row ni dalam PDF" tabindex="-1">${MARKER}</button></td>
+      <td class="d">${t.txn_raw}</td>
+      <td class="d">${t.post_raw}</td>
+      <td>${esc(t.desc)} <span class="loc">${esc(t.location)}</span>${t.extra ? `<div class="loc">${esc(t.extra)}</div>` : ""}</td>
+      <td class="amt ${t.credit ? "cr" : ""}">${amt}</td>
+    </tr>`;
+  }
+  $("#rows").innerHTML = html || `<tr><td colspan="6" style="color:var(--muted);padding:16px">Tiada transaksi dalam tapisan ni.</td></tr>`;
+  const keptVisible = vis.filter(t => state.keep.has(t.id)).length;
+  $("#shown").textContent = `${vis.length} dipapar, ${keptVisible} ditick`;
+  renderTotals();
+}
+
+function renderTotals() {
+  let debit = 0, credit = 0;
+  for (const t of state.doc.transactions) {
+    if (!state.keep.has(t.id) || t.amount == null) continue;
+    if (t.credit) credit += t.amount; else debit += t.amount;
+  }
+  $("#kCount").textContent = state.keep.size;
+  $("#kDebit").textContent = fmt(debit);
+  $("#kCredit").textContent = fmt(credit);
+  $("#kNet").textContent = fmt(debit - credit);
+  let hSum = 0;
+  for (const t of state.doc.transactions) {
+    if (state.hl.has(t.id) && t.amount != null) hSum += t.credit ? -t.amount : t.amount;
+  }
+  $("#hCount").textContent = state.hl.size;
+  $("#hSum").textContent = fmt(hSum);
+}
+
+function toggle(id, on) {
+  const want = on ?? !state.keep.has(id);
+  if (want) state.keep.add(id);
+  else { state.keep.delete(id); state.hl.delete(id); }
+}
+
+// Highlighting a row always keeps it; un-highlighting leaves it kept.
+function toggleHl(id, on) {
+  const want = on ?? !state.hl.has(id);
+  if (want) { state.hl.add(id); state.keep.add(id); } else state.hl.delete(id);
+}
+
+$("#rows").onclick = e => {
+  const tr = e.target.closest("tr[data-id]");
+  if (!tr) return;
+  if (e.target.closest("button.mk")) toggleHl(tr.dataset.id); else toggle(tr.dataset.id);
+  renderList();
+  refreshPlan();
+  focusPage(tr.dataset.id);
+};
+$("#rows").onmouseover = e => {
+  const tr = e.target.closest("tr[data-id]");
+  highlight(tr ? tr.dataset.id : null);
+};
+$("#rows").onmouseleave = () => highlight(null);
+
+for (const id of ["#basis", "#card", "#kind"]) $(id).onchange = renderList;
+$("#q").oninput = renderList;
+$("#resetF").onclick = () => { resetFilters(); renderList(); };
+$("#tickAll").onclick = () => { visible().forEach(t => toggle(t.id, true)); renderList(); refreshPlan(); };
+$("#untickAll").onclick = () => { visible().forEach(t => toggle(t.id, false)); renderList(); refreshPlan(); };
+$("#hlAll").onclick = () => { visible().forEach(t => toggleHl(t.id, true)); renderList(); refreshPlan(); };
+$("#clearHl").onclick = () => { state.hl.clear(); renderList(); refreshPlan(); };
+document.querySelectorAll("[data-opt]").forEach(el => el.onchange = refreshPlan);
+for (const id of ["#pgFrom", "#pgTo"]) $(id).oninput = refreshPlan;
+$("#pgAll").onclick = () => { $("#pgFrom").value = 1; $("#pgTo").value = state.doc.pages.length; refreshPlan(); };
+
+function options() {
+  const o = {};
+  document.querySelectorAll("[data-opt]").forEach(el => o[el.dataset.opt] = el.type === "checkbox" ? el.checked : el.value);
+  return o;
+}
+
+// Highlight colour: one CSS variable drives the list, preview and legend; remembered per browser.
+function setHlColor(hex, save = true) {
+  $("#hlColor").value = hex;
+  document.documentElement.style.setProperty("--hl", hex);
+  document.querySelectorAll(".swatch").forEach(b => b.classList.toggle("on", b.dataset.color === hex));
+  if (save) localStorage.setItem("hlColor", hex);
+}
+document.querySelectorAll(".swatch").forEach(b => b.onclick = () => { setHlColor(b.dataset.color); if (state.doc) refreshPlan(); });
+$("#hlColor").oninput = () => setHlColor($("#hlColor").value);
+setHlColor(localStorage.getItem("hlColor") || "#ffe859", false);
+
+const payload = () => JSON.stringify({
+  id: state.doc.id, keep: [...state.keep], highlight: [...state.hl], options: options(),
+});
+
+// ---------- preview ----------
+let planTimer = null, planSeq = 0;
+function refreshPlan() {
+  clearTimeout(planTimer);
+  planTimer = setTimeout(async () => {
+    const seq = ++planSeq;
+    const res = await fetch("/api/plan", {
+      method: "POST",
+      body: payload(),
+    });
+    if (seq !== planSeq) return;
+    const plan = await res.json();
+    const rep = $("#report");
+    if (!res.ok) {
+      // Keep the last good preview; just block export until the input is fixed.
+      rep.className = "bad"; rep.textContent = plan.error || "Plan gagal.";
+      $("#dl").disabled = true;
+      return;
+    }
+    $("#dl").disabled = false;
+    state.plan = plan;
+    drawPlan();
+  }, 80);
+  $("#report").textContent = ""; $("#report").className = "";
+}
+
+function pct(rect, p) {
+  const [x0, y0, x1, y1] = rect;
+  return `left:${x0 / p.w * 100}%;top:${y0 / p.h * 100}%;width:${(x1 - x0) / p.w * 100}%;height:${(y1 - y0) / p.h * 100}%`;
+}
+
+function drawPlan() {
+  const d = state.doc, plan = state.plan;
+  if (!plan || plan.error) return;
+  const layers = d.pages.map(() => []);
+  for (const h of plan.highlights) {
+    layers[h.page].push(`<div class="box y" style="${pct(h.rect, d.pages[h.page])}"></div>`);
+  }
+  for (const b of plan.boxes) {
+    layers[b.page].push(`<div class="box r" style="${pct(b.rect, d.pages[b.page])}"></div>`);
+  }
+  // Transparent full-row hit areas on top so every row stays clickable.
+  for (const t of d.transactions) {
+    const kept = state.keep.has(t.id);
+    layers[t.page].push(`<div class="box hit ${kept ? "k" : ""}" data-id="${t.id}" title="${esc(t.desc)}" style="${pct(t.rect, d.pages[t.page])}"></div>`);
+  }
+  d.pages.forEach((p, i) => {
+    const el = $("#pg" + i);
+    el.querySelector(".layer").innerHTML = layers[i].join("");
+    el.classList.toggle("dropped", plan.dropped.includes(i));
+    el.querySelector(".drop-note").innerHTML = "<span>" +
+      (plan.out_of_range.includes(i) ? "Luar julat page export" : "Page ini akan dibuang (tiada item dikekalkan)") + "</span>";
+  });
+}
+
+$("#pages").onclick = e => {
+  const box = e.target.closest(".box.hit");
+  if (!box) return;
+  if (e.shiftKey) toggleHl(box.dataset.id); else toggle(box.dataset.id);
+  renderList();
+  refreshPlan();
+};
+$("#pages").onmouseover = e => {
+  const box = e.target.closest(".box.hit");
+  document.querySelectorAll("#rows tr.hl").forEach(r => r.classList.remove("hl"));
+  if (box) $(`#rows tr[data-id="${box.dataset.id}"]`)?.classList.add("hl");
+};
+
+function highlight(id) {
+  document.querySelectorAll(".box.hl").forEach(b => b.classList.remove("hl"));
+  if (id) document.querySelector(`.box.hit[data-id="${id}"]`)?.classList.add("hl");
+}
+
+function focusPage(id) {
+  const box = document.querySelector(`.box.hit[data-id="${id}"]`);
+  const pane = $("#preview");
+  if (!box) return;
+  const r = box.getBoundingClientRect(), pr = pane.getBoundingClientRect();
+  if (r.top < pr.top || r.bottom > pr.bottom) box.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+// ---------- export ----------
+$("#dl").onclick = async () => {
+  const btn = $("#dl"), rep = $("#report");
+  btn.disabled = true; rep.className = ""; rep.textContent = "Redacting dan verify...";
+  try {
+    const res = await fetch("/api/redact", {
+      method: "POST",
+      body: payload(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const report = JSON.parse(atob(res.headers.get("X-Redaction-Report") || "e30="));
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = state.file.name.replace(/\.pdf$/i, "") + "_redacted.pdf";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    rep.className = "ok";
+    rep.textContent = `Siap. ${report.kept} item kekal (${report.highlighted} highlight), ${report.redacted_rows} row di-redact, ${report.pages_out} page. ` +
+      (report.pages_dropped.length ? `Page dibuang: ${report.pages_dropped.join(", ")}. ` : "") +
+      "Verified: tiada text tertinggal bawah kotak.";
+  } catch (e) {
+    rep.className = "bad";
+    rep.textContent = "Gagal: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+</script>
+</body>
+</html>
