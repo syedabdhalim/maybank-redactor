@@ -44,6 +44,14 @@ BALANCE_LABELS = (
 )
 NOT_CONTINUATION = re.compile(r"^(TOTAL|SUB|YOUR|JUMLAH|\(JUMLAH|KOMBINASI|MAYBANK)")
 
+# Layout of the Maybank statement, in PDF points (page is 612 wide).
+TABLE_MARGIN = 24.0   # transaction table inset from the page edge
+HEADER_BOTTOM = 90    # bottom of the title bar on page 1
+POSTING_MAX_X = 100   # posting date column ends before this
+DESC_X = 160          # description column starts here
+LOCATION_X = 395      # location sub-column inside the description column
+AMOUNT_MIN_X = 480    # amount column starts after this
+
 # fitz is not thread-safe; serialise every call into it.
 FITZ_LOCK = threading.Lock()
 DOCS: "OrderedDict[str, dict]" = OrderedDict()
@@ -57,7 +65,7 @@ def open_pdf(data: bytes, password: str = "") -> fitz.Document:
     try:
         doc = fitz.open(stream=data, filetype="pdf")
     except Exception:
-        raise ValueError("Bukan fail PDF yang sah.") from None
+        raise ValueError("Not a valid PDF file.") from None
     if doc.needs_pass and not doc.authenticate(password):
         doc.close()
         raise NeedsPassword()
@@ -99,29 +107,51 @@ def row_band(lines, first, last, x0, x1, pad=2.0):
 
 
 def text_segments(lines, first, last, gap=6.0):
-    """One box per run of adjacent words (date, description, location, amount...)."""
-    boxes = []
+    """One box per run of adjacent words (date, description, location, amount...).
+    Returns (box, word rects inside it) pairs; boxes are fitted later by fit_box."""
+    segments = []
     for i in range(first, last + 1):
-        run = None
-        prev_x1 = None
+        run, own, prev_x1 = None, [], None
         for r, _ in lines[i]["words"]:
             if run is not None and r.x0 - prev_x1 <= gap:
                 run |= r
+                own.append(r)
             else:
                 if run is not None:
-                    boxes.append(run)
-                run = fitz.Rect(r)
+                    segments.append((run, own))
+                run, own = fitz.Rect(r), [r]
             prev_x1 = r.x1
         if run is not None:
-            boxes.append(run)
-    return [fitz.Rect(b.x0 - 1.5, b.y0 - 0.5, b.x1 + 1.5, b.y1 + 0.5) for b in boxes]
+            segments.append((run, own))
+    return [(fitz.Rect(b.x0 - 1.5, b.y0 - 0.5, b.x1 + 1.5, b.y1 + 0.5), own) for b, own in segments]
 
 
-def word_box(rect, px=0.8, py=-1.0):
-    """Box for a single word/line. Shrunk vertically: some statement rows sit closer
-    together than their glyph boxes are tall, and a full-height box would eat the
-    neighbouring row."""
+def word_box(rect, px=0.8, py=0.5):
     return fitz.Rect(rect.x0 - px, rect.y0 - py, rect.x1 + px, rect.y1 + py)
+
+
+def fit_box(box, own, page_words):
+    """Shrink a redaction box vertically so it touches no word outside `own`.
+
+    MuPDF removes every glyph whose box touches a redaction rect. On tightly spaced
+    lines the glyph boxes of neighbouring rows overlap, so a box sized to its own
+    words would also wipe the row above or below. Text under the shrunk box is still
+    removed in full, since touching is enough.
+    """
+    box = fitz.Rect(box)
+    mid = (box.y0 + box.y1) / 2
+    for w in page_words:
+        if any(w == o for o in own):
+            continue
+        if w.x0 >= box.x1 or w.x1 <= box.x0 or w.y0 >= box.y1 or w.y1 <= box.y0:
+            continue
+        if (w.y0 + w.y1) / 2 > mid:
+            box.y1 = min(box.y1, w.y0 - 0.2)
+        else:
+            box.y0 = max(box.y0, w.y1 + 0.2)
+    if box.y1 - box.y0 < 1.0:  # neighbours closer than this can't be separated; keep a sliver
+        box.y0, box.y1 = mid - 0.5, mid + 0.5
+    return box
 
 
 def card_runs(words):
@@ -147,7 +177,7 @@ def to_iso(ddmm, stmt):
 
 
 def parse_statement(doc):
-    stmt = None
+    warnings = []
     p0 = page_lines(doc[0])
     # Statement date sits left of the payment due date in the header box.
     candidates = []
@@ -162,15 +192,20 @@ def parse_statement(doc):
         stmt = date(2000 + int(m.group(3)), MONTHS[m.group(2)], int(m.group(1)))
     else:
         stmt = date.today()
+        warnings.append("Statement date not found, so transaction years are guessed from today's date.")
 
     txns, fields, cards = [], [], []
     current_card = None
-    holder = ""
+
+    def add_field(category, pno, rect, text, own):
+        fields.append({"category": category, "page": pno, "rect": rect, "text": text, "own": own})
 
     for pno, page in enumerate(doc):
         lines = page_lines(page)
+        page_words = [r for ln in lines for r, _ in ln["words"]]
+        first_field, first_txn = len(fields), len(txns)
         width = page.rect.width
-        left, right = 24.0, width - 24.0
+        left, right = TABLE_MARGIN, width - TABLE_MARGIN
         for ln in lines:
             if ln["words"][0][1] == "Posting":
                 left = ln["words"][0][0].x0 - 3
@@ -179,7 +214,7 @@ def parse_statement(doc):
         for ln in lines:
             for run in card_runs(ln["words"]):
                 for r, t in run[:-1]:
-                    fields.append({"category": "card", "page": pno, "rect": word_box(r), "text": t})
+                    add_field("card", pno, word_box(r), t, [r])
 
         # Page 1 header: name/address block and the summary table figures.
         if pno == 0:
@@ -187,20 +222,19 @@ def parse_statement(doc):
             warning_top = next((ln["rect"].y0 for ln in lines if ln["text"].startswith("WARNING")), None)
             for ln in lines:
                 y = ln["rect"].y0
-                if summary_top and 90 < y < summary_top - 30:
-                    left_words = [(r, t) for r, t in ln["words"] if r.x0 < 300]
+                # Mailing block: left half of the page, between the title bar and the summary table.
+                if summary_top and HEADER_BOTTOM < y < summary_top - 30:
+                    left_words = [(r, t) for r, t in ln["words"] if r.x0 < width / 2]
                     if left_words:
-                        if not holder:
-                            holder = " ".join(t for _, t in left_words)
                         box = fitz.Rect(left_words[0][0])
                         for r, _ in left_words:
                             box |= r
-                        fields.append({"category": "identity", "page": pno, "rect": word_box(box),
-                                       "text": " ".join(t for _, t in left_words)})
+                        add_field("identity", pno, word_box(box), " ".join(t for _, t in left_words),
+                                  [r for r, _ in left_words])
                 if summary_top and warning_top and summary_top + 5 < y < warning_top:
                     for r, t in ln["words"]:
-                        if MONEY_RE.match(t) and r.x0 > 160:
-                            fields.append({"category": "balances", "page": pno, "rect": word_box(r), "text": t})
+                        if MONEY_RE.match(t) and r.x0 > DESC_X:
+                            add_field("balances", pno, word_box(r), t, [r])
 
         i = 0
         while i < len(lines):
@@ -214,29 +248,36 @@ def parse_statement(doc):
                 digits = "".join(t for _, t in words[k + 1:] if t.isdigit())
                 if 15 <= len(digits) <= 16:
                     name = " ".join(t for _, t in words[:k])
-                    current_card = {"id": len(cards), "name": name, "last4": digits[-4:], "page": pno}
+                    current_card = {"id": len(cards), "name": name, "last4": digits[-4:], "page": pno,
+                                    "totals": {}}
                     cards.append(current_card)
                     if i > 0 and ln["rect"].y0 - lines[i - 1]["rect"].y1 < 8:
                         prev = lines[i - 1]
-                        fields.append({"category": "identity", "page": pno,
-                                       "rect": word_box(prev["rect"]), "text": prev["text"]})
+                        add_field("identity", pno, word_box(prev["rect"]), prev["text"],
+                                  [r for r, _ in prev["words"]])
 
             for label in BALANCE_LABELS:
                 if text.startswith(label):
                     for r, t in words:
-                        if NUMBER_RE.match(t) and any(ch.isdigit() for ch in t) and r.x0 > 300:
-                            fields.append({"category": "balances", "page": pno, "rect": word_box(r), "text": t})
+                        if NUMBER_RE.match(t) and any(ch.isdigit() for ch in t) and r.x0 > page.rect.width / 2:
+                            add_field("balances", pno, word_box(r), t, [r])
+                            if current_card and label.startswith("TOTAL"):
+                                kind = "credit" if "CREDIT" in label else "debit"
+                                current_card["totals"][kind] = float(t.replace(",", ""))
 
             is_txn = (len(words) >= 3 and DATE_RE.match(words[0][1]) and DATE_RE.match(words[1][1])
-                      and words[0][0].x0 < 100)
+                      and words[0][0].x0 < POSTING_MAX_X)
             if not is_txn:
+                if DATE_RE.match(words[0][1]) and words[0][0].x0 < DESC_X:
+                    warnings.append(f"Page {pno + 1}: a dated line was not recognised as a transaction "
+                                    f"and will not be redacted. Check the preview.")
                 i += 1
                 continue
 
-            amount_word = words[-1] if MONEY_RE.match(words[-1][1]) and words[-1][0].x0 > 480 else None
+            amount_word = words[-1] if MONEY_RE.match(words[-1][1]) and words[-1][0].x0 > AMOUNT_MIN_X else None
             body = words[2:-1] if amount_word else words[2:]
-            desc = " ".join(t for r, t in body if r.x0 < 395)
-            location = " ".join(t for r, t in body if r.x0 >= 395)
+            desc = " ".join(t for r, t in body if r.x0 < LOCATION_X)
+            location = " ".join(t for r, t in body if r.x0 >= LOCATION_X)
 
             # Continuation lines (e.g. "TRANSACTED AMOUNT USD 19.99") belong to this row.
             last = i
@@ -244,7 +285,7 @@ def parse_statement(doc):
             while last + 1 < len(lines):
                 nxt = lines[last + 1]
                 nw = nxt["words"]
-                if (DATE_RE.match(nw[0][1]) or nw[0][0].x0 < 150
+                if (DATE_RE.match(nw[0][1]) or nw[0][0].x0 < DESC_X - 10
                         or nxt["rect"].y0 - lines[last]["rect"].y1 > 8
                         or NOT_CONTINUATION.match(nxt["text"])):
                     break
@@ -276,14 +317,46 @@ def parse_statement(doc):
             })
             i = last + 1
 
+        # Fit every box found on this page so none of them reaches into a neighbouring line.
+        for f in fields[first_field:]:
+            f["rect"] = fit_box(f["rect"], f.pop("own"), page_words)
+        for t in txns[first_txn:]:
+            t["segments"] = [fit_box(box, own, page_words) for box, own in t["segments"]]
+
+    warnings += reconcile(cards, txns)
     return {
         "statement_date": stmt.isoformat(),
-        "holder": holder,
         "cards": cards,
         "transactions": txns,
         "fields": fields,
+        "warnings": warnings,
         "pages": [{"w": p.rect.width, "h": p.rect.height} for p in doc],
     }
+
+
+def reconcile(cards, txns):
+    """Cross-check parsed rows against the totals printed on the statement.
+
+    The parser only redacts rows it recognises. If a row was missed, the sums here
+    won't match the statement's own TOTAL DEBIT / TOTAL CREDIT, and the user is told
+    to check the preview before sending the file anywhere.
+    """
+    warnings = []
+    for c in cards:
+        label = f"{c['name']} ..{c['last4']}"
+        rows = [t for t in txns if t["card"] == c["id"] and t["amount"] is not None]
+        parsed = {
+            "debit": round(sum(t["amount"] for t in rows if not t["credit"]), 2),
+            "credit": round(sum(t["amount"] for t in rows if t["credit"]), 2),
+        }
+        for kind in ("debit", "credit"):
+            printed = c["totals"].get(kind)
+            if printed is None:
+                warnings.append(f"{label}: total {kind} not found on the statement, so rows could not be cross-checked.")
+            elif abs(printed - parsed[kind]) > 0.005:
+                warnings.append(f"{label}: recognised {kind}s add up to {parsed[kind]:,.2f} but the statement says "
+                                f"{printed:,.2f}. Some rows may not have been recognised; check the preview.")
+    return warnings
 
 
 # ---------- planning & redaction ----------
@@ -307,10 +380,10 @@ def page_range(opts, n):
         lo = int(opts.get("page_from") or 1)
         hi = int(opts.get("page_to") or n)
     except (TypeError, ValueError):
-        raise ValueError("Julat page tak sah.") from None
+        raise ValueError("Invalid page range.") from None
     lo, hi = max(1, lo), min(n, hi)
     if lo > hi:
-        raise ValueError("Julat page tak sah: page awal lebih besar dari page akhir.")
+        raise ValueError("Invalid page range: start page is after end page.")
     return set(range(lo - 1, hi))
 
 
@@ -338,7 +411,7 @@ def build_plan(parsed, keep_ids, opts, highlight_ids=()):
     in_range = page_range(opts, n)
     keep_pages &= in_range
     if not keep_pages:
-        raise ValueError("Tiada page untuk di-export dalam julat ni.")
+        raise ValueError("No pages left to export in this range.")
     dropped = [p for p in range(n) if p not in keep_pages]
     boxes = [b for b in boxes if b["page"] in keep_pages]
     highlights = [{"page": t["page"], "rect": t["rect"], "txn": t["id"]}
@@ -364,6 +437,10 @@ def leaked_words(page, rects):
     return leaks
 
 
+def word_key(w):
+    return (w[4], round(w[0], 1), round(w[1], 1))
+
+
 def redact(entry, keep_ids, opts, highlight_ids=()):
     parsed = entry["parsed"]
     plan = build_plan(parsed, keep_ids, opts, highlight_ids)
@@ -372,11 +449,20 @@ def redact(entry, keep_ids, opts, highlight_ids=()):
         by_page = {}
         for b in plan["boxes"]:
             by_page.setdefault(b["page"], []).append(b["rect"])
+        keep_pages = [p for p in range(doc.page_count) if p not in plan["dropped"]]
+
+        # Everything on an exported page that no box touches must come through intact.
+        expected = {}
+        for pno in keep_pages:
+            rects = by_page.get(pno, [])
+            expected[pno] = [w for w in doc[pno].get_text("words")
+                             if not any(fitz.Rect(w[:4]).intersects(r) for r in rects)]
+
         for pno, rects in by_page.items():
             page = doc[pno]
             for r in rects:
                 page.add_redact_annot(r, fill=(0, 0, 0))
-            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE,
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_PIXELS,
                                   graphics=fitz.PDF_REDACT_LINE_ART_NONE)
 
         # Marker drawn underneath the page content (rows have no background fill),
@@ -385,39 +471,55 @@ def redact(entry, keep_ids, opts, highlight_ids=()):
         for h in plan["highlights"]:
             doc[h["page"]].draw_rect(h["rect"], color=None, fill=fill, width=0, overlay=False)
 
-        keep_pages = [p for p in range(doc.page_count) if p not in plan["dropped"]]
         if len(keep_pages) < doc.page_count:
             doc.select(keep_pages)
 
-        doc.scrub(hidden_text=False, redactions=False, clean_pages=True)
-        doc.set_metadata({})
-        out = doc.tobytes(garbage=4, deflate=True, clean=True, encryption=fitz.PDF_ENCRYPT_NONE)
+        # Copy only the page content into a fresh file. This leaves behind annotations,
+        # form fields, links, bookmarks, the tagged-PDF structure tree, metadata and the
+        # original file ID, none of which apply_redactions touches.
+        clean = fitz.open()
+        try:
+            clean.insert_pdf(doc, links=False, annots=False, widgets=False)
+            clean.set_metadata({})
+            out = clean.tobytes(garbage=4, deflate=True, clean=True)
+        finally:
+            clean.close()
     finally:
         doc.close()
 
-    # Re-open the final bytes and prove nothing survived under any box.
+    # Re-open the final bytes and check both directions: nothing left under a box,
+    # and nothing outside the boxes lost.
     check = fitz.open(stream=out, filetype="pdf")
     try:
         new_index = {old: new for new, old in enumerate(keep_pages)}
-        leaks = []
-        for pno, rects in by_page.items():
-            leaks += leaked_words(check[new_index[pno]], rects)
+        leaks, damaged = [], []
+        for pno in keep_pages:
+            page = check[new_index[pno]]
+            leaks += leaked_words(page, by_page.get(pno, []))
+            if page.first_annot:
+                leaks.append("<annotation>")
+            present = {word_key(w) for w in page.get_text("words")}
+            damaged += [w[4] for w in expected[pno] if word_key(w) not in present]
         if check.page_count != len(keep_pages):
             leaks.append("<page count mismatch>")
     finally:
         check.close()
     if leaks:
-        raise RuntimeError(f"Verification failed, {len(leaks)} word(s) still present: {leaks[:5]}")
+        raise RuntimeError(f"Check failed, {len(leaks)} item(s) still present under redaction: {leaks[:5]}")
 
-    kept = [t for t in parsed["transactions"] if t["id"] in set(keep_ids) | set(highlight_ids)]
+    warnings = []
+    if damaged:
+        sample = ", ".join(damaged[:4])
+        warnings.append(f"{len(damaged)} word(s) that should have been kept are missing ({sample}). "
+                        "Open the PDF and check it, or try the Full-row blocks style.")
+    keep = set(keep_ids) | set(highlight_ids)
     report = {
-        "kept": len(kept),
+        "kept": sum(1 for t in parsed["transactions"] if t["id"] in keep and t["page"] in new_index),
         "highlighted": len(plan["highlights"]),
         "redacted_rows": len({b["txn"] for b in plan["boxes"] if b["kind"] == "txn"}),
-        "boxes": len(plan["boxes"]),
         "pages_out": len(keep_pages),
         "pages_dropped": [p + 1 for p in plan["dropped"]],
-        "verified": True,
+        "warnings": warnings,
     }
     return out, report
 
@@ -432,12 +534,10 @@ def public_view(parsed):
         return out
     return {
         "statement_date": parsed["statement_date"],
-        "holder": parsed["holder"],
         "cards": parsed["cards"],
         "pages": parsed["pages"],
         "transactions": [conv(t) for t in parsed["transactions"]],
-        "field_counts": {c: sum(1 for f in parsed["fields"] if f["category"] == c)
-                         for c in ("balances", "card", "identity")},
+        "warnings": parsed["warnings"],
     }
 
 
@@ -487,7 +587,7 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(url.query)
             entry = self.get_entry(q.get("id", [""])[0])
             if not entry:
-                return self.send_json(404, {"error": "Dokumen tiada. Upload semula."})
+                return self.send_json(404, {"error": "Document not found. Please upload it again."})
             n = int(q.get("n", ["0"])[0])
             key = ("png", n)
             if key not in entry["cache"]:
@@ -512,14 +612,14 @@ class Handler(BaseHTTPRequestHandler):
                         doc = open_pdf(data, password)
                     except NeedsPassword:
                         return self.send_json(401, {"needs_password": True,
-                                                    "error": "PDF ni berkata laluan." if password == ""
-                                                    else "Kata laluan salah."})
+                                                    "error": "This PDF is password-protected." if password == ""
+                                                    else "Wrong password."})
                     try:
                         parsed = parse_statement(doc)
                     finally:
                         doc.close()
                 if not parsed["transactions"]:
-                    return self.send_json(422, {"error": "Tak jumpa transaksi. Ini bukan penyata kad kredit Maybank?"})
+                    return self.send_json(422, {"error": "No transactions found. Is this a Maybank credit card statement?"})
                 doc_id = uuid.uuid4().hex
                 DOCS[doc_id] = {"data": data, "password": password, "parsed": parsed, "cache": {}}
                 while len(DOCS) > MAX_DOCS:
@@ -530,7 +630,7 @@ class Handler(BaseHTTPRequestHandler):
                 req = json.loads(self.read_body() or b"{}")
                 entry = self.get_entry(req.get("id", ""))
                 if not entry:
-                    return self.send_json(404, {"error": "Dokumen tiada. Upload semula."})
+                    return self.send_json(404, {"error": "Document not found. Please upload it again."})
                 keep = req.get("keep", [])
                 highlight = req.get("highlight", [])
                 opts = req.get("options", {})
@@ -574,9 +674,9 @@ def main():
     try:
         server = Server((HOST, PORT), Handler)
     except OSError:
-        print(f"Port {PORT} dah digunakan. Redactor mungkin dah jalan dalam window lain:")
+        print(f"Port {PORT} is already in use. The redactor may already be running in another window:")
         print(f"  {url}")
-        print("Tutup window tu dulu kalau nak restart dengan code terbaru.")
+        print("Close that window first if you want to restart with the latest code.")
         sys.exit(1)
     print(f"Maybank Redactor running at {url}  (Ctrl+C to stop)")
     if "--no-browser" not in sys.argv:
