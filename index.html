@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ms">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,7 +12,6 @@
     --paper: #faf8f3;
     --panel: #ffffff;
     --accent: #ffc72c;
-    --accent-ink: #5a4300;
     --keep: #1f8a4c;
     --credit: #1f8a4c;
     --danger: #b3261e;
@@ -115,6 +114,13 @@
   #report { font-size: 12px; color: var(--muted); }
   #report.ok { color: var(--keep); }
   #report.bad { color: var(--danger); }
+  #report.warn { color: #8a5a00; }
+  .notice {
+    display: none; margin: 12px 16px 0; padding: 8px 12px; font-size: 12px; color: #5a4300;
+    background: #fff8dc; border: 1px solid #e8c766; border-radius: 6px;
+  }
+  .notice.show { display: block; }
+  .notice ul { margin: 4px 0 0; padding-left: 18px; }
 
   /* Preview */
   #preview { overflow: auto; padding: 20px; min-height: 0; }
@@ -126,7 +132,6 @@
   .box { position: absolute; }
   .box.r { background: rgba(0,0,0,.86); }
   .box.k { outline: 1.5px solid var(--keep); background: rgba(31,138,76,.07); }
-  .box.hit { z-index: 1; }
   .box.y { background: var(--hl); opacity: .6; }
   .hl-row { display: flex; align-items: center; gap: 6px; font-size: 13px; }
   .swatch {
@@ -137,16 +142,17 @@
   #hlColor { width: 30px; height: 24px; padding: 0 2px; border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer; }
   .pages-row { display: flex; align-items: center; gap: 6px; font-size: 13px; }
   .pages-row input { width: 56px; }
-  .box.hit { cursor: pointer; }
+  .box.hit { cursor: pointer; z-index: 1; }
   .box.hit:hover { outline: 2px solid var(--accent); }
   .box.hl { outline: 2px solid var(--accent); z-index: 2; }
   .page.dropped img { opacity: .18; }
-  .page.dropped .box { display: none; }
+  /* Dropped pages hide their overlays but keep rows clickable, so a row there can still be kept. */
+  .page.dropped .box:not(.hit) { display: none; }
   .page .drop-note {
     display: none; position: absolute; inset: 0; align-items: center; justify-content: center;
     font-weight: 600; color: var(--muted); letter-spacing: .3px;
   }
-  .page.dropped .drop-note { display: flex; }
+  .page.dropped .drop-note { display: flex; pointer-events: none; }
   .drop-note span { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 14px; }
 </style>
 </head>
@@ -155,107 +161,108 @@
   <h1><span>Maybank</span>Redactor</h1>
   <div class="meta" id="meta"></div>
   <div class="spacer"></div>
-  <div class="privacy">Local sahaja: fail diproses dalam mesin ni, tak keluar ke internet.</div>
-  <button id="newBtn" style="display:none">Fail lain</button>
+  <div class="privacy">Runs locally. Your file never leaves this machine.</div>
+  <button id="newBtn" style="display:none">Open another file</button>
 </header>
 
 <section id="drop">
-  <h2>Drop penyata kad kredit Maybank (PDF)</h2>
-  <p>Pilih tarikh dan item yang nak dikekalkan. Yang lain akan di-redact betul-betul (text dibuang, bukan sekadar ditutup).</p>
-  <button class="primary" id="pickBtn">Pilih fail</button>
+  <h2>Drop a Maybank credit card statement (PDF)</h2>
+  <p>Pick the dates and transactions to keep. Everything else is properly redacted: the text is removed, not just covered.</p>
+  <button class="primary" id="pickBtn">Choose file</button>
   <input type="file" id="file" accept="application/pdf" hidden>
   <div id="pwRow">
-    <input type="password" id="pw" placeholder="Kata laluan PDF">
-    <button id="pwBtn">Buka</button>
+    <input type="password" id="pw" placeholder="PDF password">
+    <button id="pwBtn">Open</button>
   </div>
   <div class="err" id="err"></div>
 </section>
 
 <main id="work">
   <aside id="left">
+    <div class="notice" id="notice"></div>
     <div class="filters">
       <div class="row">
-        <label class="sm" for="from">Dari</label>
-        <span class="dt"><input type="text" id="from" placeholder="dd/mm/yyyy" maxlength="10" inputmode="numeric" autocomplete="off"><button type="button" class="cal" data-for="from" title="Pilih dari kalendar"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg></button><input type="date" class="native" tabindex="-1" aria-hidden="true"></span>
-        <label class="sm" for="to">Hingga</label>
-        <span class="dt"><input type="text" id="to" placeholder="dd/mm/yyyy" maxlength="10" inputmode="numeric" autocomplete="off"><button type="button" class="cal" data-for="to" title="Pilih dari kalendar"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg></button><input type="date" class="native" tabindex="-1" aria-hidden="true"></span>
-        <select id="basis" title="Tarikh yang digunakan untuk tapisan">
-          <option value="txn_date">Tarikh transaksi</option>
-          <option value="post_date">Tarikh pos</option>
+        <label class="sm" for="from">From</label>
+        <span class="dt"><input type="text" id="from" placeholder="dd/mm/yyyy" maxlength="10" inputmode="numeric" autocomplete="off"><button type="button" class="cal" data-for="from" title="Pick from calendar"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg></button><input type="date" class="native" tabindex="-1" aria-hidden="true"></span>
+        <label class="sm" for="to">To</label>
+        <span class="dt"><input type="text" id="to" placeholder="dd/mm/yyyy" maxlength="10" inputmode="numeric" autocomplete="off"><button type="button" class="cal" data-for="to" title="Pick from calendar"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg></button><input type="date" class="native" tabindex="-1" aria-hidden="true"></span>
+        <select id="basis" title="Which date the filter uses">
+          <option value="txn_date">Transaction date</option>
+          <option value="post_date">Posting date</option>
         </select>
       </div>
       <div class="row">
-        <input type="text" id="q" placeholder="Cari huraian / lokasi / amaun">
+        <input type="text" id="q" placeholder="Search transactions">
         <select id="card"></select>
         <select id="kind">
-          <option value="all">Semua jenis</option>
-          <option value="debit">Debit sahaja</option>
-          <option value="credit">Kredit (CR) sahaja</option>
+          <option value="all">All types</option>
+          <option value="debit">Debits only</option>
+          <option value="credit">Credits (CR) only</option>
         </select>
       </div>
       <div class="bulk">
-        <button id="tickAll" title="Tick semua transaksi yang dipapar">Tick semua</button>
-        <button id="untickAll" title="Untick semua transaksi yang dipapar">Untick semua</button>
-        <button id="hlAll" title="Highlight (dan keep) semua transaksi yang dipapar">Highlight semua</button>
-        <button class="link" id="clearHl">Buang highlight</button>
-        <button class="link" id="resetF">Reset tapisan</button>
+        <button id="tickAll" title="Keep every transaction shown">Keep all</button>
+        <button id="untickAll" title="Un-keep every transaction shown">Clear all</button>
+        <button id="hlAll" title="Highlight (and keep) every transaction shown">Highlight all</button>
+        <button class="link" id="clearHl">Clear highlights</button>
+        <button class="link" id="resetF">Reset filters</button>
         <span class="count" id="shown"></span>
       </div>
     </div>
     <div id="list">
       <table>
-        <thead><tr><th></th><th title="Highlight"></th><th>Txn</th><th>Pos</th><th>Huraian</th><th style="text-align:right">RM</th></tr></thead>
+        <thead><tr><th></th><th title="Highlight"></th><th>Txn</th><th>Posted</th><th>Description</th><th style="text-align:right">RM</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
     <div class="foot">
       <div class="totals">
-        <span>Dikekalkan: <b id="kCount">0</b></span>
+        <span>Kept: <b id="kCount">0</b></span>
         <span>Debit: <b id="kDebit">0.00</b></span>
-        <span>Kredit: <b id="kCredit">0.00</b></span>
-        <span>Bersih: <b id="kNet">0.00</b></span>
+        <span>Credit: <b id="kCredit">0.00</b></span>
+        <span>Net: <b id="kNet">0.00</b></span>
         <span>Highlight: <b id="hCount">0</b> / RM <b id="hSum">0.00</b></span>
       </div>
       <div class="opts">
-        <label><input type="checkbox" data-opt="balances" checked> Redact baki, jumlah &amp; had kredit</label>
-        <label><input type="checkbox" data-opt="card" checked> Mask nombor kad <small>(kekal 4 digit akhir)</small></label>
-        <label><input type="checkbox" data-opt="identity"> Redact nama &amp; alamat</label>
-        <label><input type="checkbox" data-opt="drop_pages" checked> Buang page tanpa item dikekalkan</label>
-        <label>Gaya redaction:
+        <label><input type="checkbox" data-opt="balances" checked> Redact balances, totals &amp; credit limit</label>
+        <label><input type="checkbox" data-opt="card" checked> Mask card numbers <small>(keep last digits)</small></label>
+        <label><input type="checkbox" data-opt="identity"> Redact name &amp; address</label>
+        <label><input type="checkbox" data-opt="drop_pages" checked> Drop pages with nothing kept</label>
+        <label>Redaction style:
           <select data-opt="style">
-            <option value="text">Text sahaja</option>
-            <option value="rows">Blok penuh baris</option>
+            <option value="text">Text only</option>
+            <option value="rows">Full-row blocks</option>
           </select>
         </label>
       </div>
       <div class="hl-row">
-        <span>Warna highlight</span>
-        <button type="button" class="swatch" data-color="#ffe859" title="Kuning" style="background:#ffe859"></button>
-        <button type="button" class="swatch" data-color="#a6f0a6" title="Hijau" style="background:#a6f0a6"></button>
-        <button type="button" class="swatch" data-color="#a8d8ff" title="Biru" style="background:#a8d8ff"></button>
+        <span>Highlight colour</span>
+        <button type="button" class="swatch" data-color="#ffe859" title="Yellow" style="background:#ffe859"></button>
+        <button type="button" class="swatch" data-color="#a6f0a6" title="Green" style="background:#a6f0a6"></button>
+        <button type="button" class="swatch" data-color="#a8d8ff" title="Blue" style="background:#a8d8ff"></button>
         <button type="button" class="swatch" data-color="#ffb3d9" title="Pink" style="background:#ffb3d9"></button>
-        <button type="button" class="swatch" data-color="#ffc870" title="Oren" style="background:#ffc870"></button>
-        <input type="color" id="hlColor" value="#ffe859" data-opt="hl_color" title="Warna sendiri">
+        <button type="button" class="swatch" data-color="#ffc870" title="Orange" style="background:#ffc870"></button>
+        <input type="color" id="hlColor" value="#ffe859" data-opt="hl_color" title="Custom colour">
       </div>
       <div class="pages-row">
-        <span>Export page</span>
+        <span>Export pages</span>
         <input type="number" id="pgFrom" min="1" value="1" data-opt="page_from">
-        <span>hingga</span>
+        <span>to</span>
         <input type="number" id="pgTo" min="1" value="1" data-opt="page_to">
-        <button class="link" id="pgAll">Semua page</button>
+        <button class="link" id="pgAll">All pages</button>
       </div>
       <div class="actions">
-        <button class="primary" id="dl">Muat turun PDF redacted</button>
+        <button class="primary" id="dl">Download redacted PDF</button>
         <span id="report"></span>
       </div>
     </div>
   </aside>
   <section id="preview">
     <div class="legend">
-      <span><i class="sw" style="background:#000"></i>Akan di-redact</span>
-      <span><i class="sw" style="outline:1.5px solid var(--keep)"></i>Dikekalkan</span>
+      <span><i class="sw" style="background:#000"></i>Redacted</span>
+      <span><i class="sw" style="outline:1.5px solid var(--keep)"></i>Kept</span>
       <span><i class="sw" style="background:var(--hl)"></i>Highlight</span>
-      <span>Klik row = keep/redact, Shift+klik = highlight.</span>
+      <span>Click a row to keep/redact, Shift+click to highlight.</span>
     </div>
     <div id="pages"></div>
   </section>
@@ -288,7 +295,7 @@ $("#newBtn").onclick = () => {
 
 async function load(file, password = "") {
   state.file = file;
-  $("#err").textContent = "Membaca...";
+  $("#err").textContent = "Reading...";
   const res = await fetch("/api/open", {
     method: "POST",
     headers: { "X-Password": encodeURIComponent(password) },
@@ -301,7 +308,7 @@ async function load(file, password = "") {
     $("#pw").focus();
     return;
   }
-  if (!res.ok) { $("#err").textContent = data.error || "Gagal buka fail."; return; }
+  if (!res.ok) { $("#err").textContent = data.error || "Could not open the file."; return; }
   state.doc = data;
   state.keep = new Set();
   state.hl = new Set();
@@ -315,10 +322,15 @@ function start() {
   $("#work").classList.add("show");
   $("#newBtn").style.display = "";
   const cardName = c => `${c.name.replace(/^MAYBANK\s*/, "")} ..${c.last4}`;
-  $("#meta").textContent = `${state.file.name}  |  Penyata ${d.statement_date}  |  ${d.transactions.length} transaksi`;
-  $("#card").innerHTML = `<option value="all">Semua kad</option>` +
+  $("#meta").textContent = `${state.file.name}  |  Statement ${toDmy(d.statement_date)}  |  ${d.transactions.length} transactions`;
+  $("#card").innerHTML = `<option value="all">All cards</option>` +
     d.cards.map(c => `<option value="${c.id}">${esc(cardName(c))}</option>`).join("");
   resetFilters();
+  // Parser cross-checks (row totals vs the statement, unrecognised dated lines).
+  $("#notice").classList.toggle("show", d.warnings.length > 0);
+  $("#notice").innerHTML = d.warnings.length
+    ? `<b>Check the preview before sending this file.</b><ul>${d.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>`
+    : "";
   const n = d.pages.length;
   for (const id of ["#pgFrom", "#pgTo"]) $(id).max = n;
   $("#pgFrom").value = 1; $("#pgTo").value = n;
@@ -411,23 +423,23 @@ function renderList() {
   for (const t of vis) {
     if (t.card !== lastCard && d.cards.length > 1) {
       const c = d.cards[t.card];
-      html += `<tr class="section"><td colspan="6">${esc(c ? `${c.name} ..${c.last4}` : "Lain-lain")}</td></tr>`;
+      html += `<tr class="section"><td colspan="6">${esc(c ? `${c.name} ..${c.last4}` : "Other")}</td></tr>`;
       lastCard = t.card;
     }
     const kept = state.keep.has(t.id), marked = state.hl.has(t.id);
     const amt = t.amount == null ? "" : fmt(t.amount) + (t.credit ? " CR" : "");
     html += `<tr data-id="${t.id}" class="${kept ? "kept" : ""} ${marked ? "mk" : ""}">
       <td><input type="checkbox" ${kept ? "checked" : ""} tabindex="-1"></td>
-      <td class="mkc"><button class="mk" title="Highlight row ni dalam PDF" tabindex="-1">${MARKER}</button></td>
+      <td class="mkc"><button class="mk" title="Highlight this row in the PDF" tabindex="-1">${MARKER}</button></td>
       <td class="d">${t.txn_raw}</td>
       <td class="d">${t.post_raw}</td>
       <td>${esc(t.desc)} <span class="loc">${esc(t.location)}</span>${t.extra ? `<div class="loc">${esc(t.extra)}</div>` : ""}</td>
       <td class="amt ${t.credit ? "cr" : ""}">${amt}</td>
     </tr>`;
   }
-  $("#rows").innerHTML = html || `<tr><td colspan="6" style="color:var(--muted);padding:16px">Tiada transaksi dalam tapisan ni.</td></tr>`;
+  $("#rows").innerHTML = html || `<tr><td colspan="6" style="color:var(--muted);padding:16px">No transactions match these filters.</td></tr>`;
   const keptVisible = vis.filter(t => state.keep.has(t.id)).length;
-  $("#shown").textContent = `${vis.length} dipapar, ${keptVisible} ditick`;
+  $("#shown").textContent = `${vis.length} shown, ${keptVisible} kept`;
   renderTotals();
 }
 
@@ -522,7 +534,7 @@ function refreshPlan() {
     const rep = $("#report");
     if (!res.ok) {
       // Keep the last good preview; just block export until the input is fixed.
-      rep.className = "bad"; rep.textContent = plan.error || "Plan gagal.";
+      rep.className = "bad"; rep.textContent = plan.error || "Could not build the preview.";
       $("#dl").disabled = true;
       return;
     }
@@ -558,7 +570,7 @@ function drawPlan() {
     el.querySelector(".layer").innerHTML = layers[i].join("");
     el.classList.toggle("dropped", plan.dropped.includes(i));
     el.querySelector(".drop-note").innerHTML = "<span>" +
-      (plan.out_of_range.includes(i) ? "Luar julat page export" : "Page ini akan dibuang (tiada item dikekalkan)") + "</span>";
+      (plan.out_of_range.includes(i) ? "Outside export page range" : "This page will be dropped (nothing kept)") + "</span>";
   });
 }
 
@@ -591,7 +603,7 @@ function focusPage(id) {
 // ---------- export ----------
 $("#dl").onclick = async () => {
   const btn = $("#dl"), rep = $("#report");
-  btn.disabled = true; rep.className = ""; rep.textContent = "Redacting dan verify...";
+  btn.disabled = true; rep.className = ""; rep.textContent = "Redacting and checking...";
   try {
     const res = await fetch("/api/redact", {
       method: "POST",
@@ -608,13 +620,18 @@ $("#dl").onclick = async () => {
     a.download = state.file.name.replace(/\.pdf$/i, "") + "_redacted.pdf";
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    rep.className = "ok";
-    rep.textContent = `Siap. ${report.kept} item kekal (${report.highlighted} highlight), ${report.redacted_rows} row di-redact, ${report.pages_out} page. ` +
-      (report.pages_dropped.length ? `Page dibuang: ${report.pages_dropped.join(", ")}. ` : "") +
-      "Verified: tiada text tertinggal bawah kotak.";
+    const summary = `Done. ${report.kept} kept (${report.highlighted} highlighted), ${report.redacted_rows} rows redacted, ${report.pages_out} page(s). ` +
+      (report.pages_dropped.length ? `Dropped pages: ${report.pages_dropped.join(", ")}. ` : "");
+    if (report.warnings.length) {
+      rep.className = "warn";
+      rep.textContent = summary + report.warnings.join(" ");
+    } else {
+      rep.className = "ok";
+      rep.textContent = summary + "Checked: no text left under the boxes, and everything outside them is intact.";
+    }
   } catch (e) {
     rep.className = "bad";
-    rep.textContent = "Gagal: " + e.message;
+    rep.textContent = "Failed: " + e.message;
   } finally {
     btn.disabled = false;
   }
