@@ -26,6 +26,13 @@ PORT = int(os.environ.get("REDACTOR_PORT", 3090))
 MAX_UPLOAD = 50 * 1024 * 1024
 MAX_DOCS = 8
 ROOT = Path(__file__).resolve().parent
+# The only files the server hands out; URL paths never touch the filesystem directly.
+STATIC = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/static/app.js": ("static/app.js", "text/javascript; charset=utf-8"),
+    "/static/style.css": ("static/style.css", "text/css; charset=utf-8"),
+}
 
 DATE_RE = re.compile(r"^\d{2}/\d{2}$")
 MONEY_RE = re.compile(r"^[\d,]+\.\d{2}(CR)?$")
@@ -581,8 +588,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urlparse(self.path)
-        if url.path in ("/", "/index.html"):
-            return self.send_bytes(200, (ROOT / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if url.path in STATIC:
+            name, ctype = STATIC[url.path]
+            return self.send_bytes(200, (ROOT / name).read_bytes(), ctype)
         if url.path == "/api/page":
             q = parse_qs(url.query)
             entry = self.get_entry(q.get("id", [""])[0])
